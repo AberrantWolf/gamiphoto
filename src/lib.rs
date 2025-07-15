@@ -1,18 +1,24 @@
+#[allow(dead_code, clippy::type_complexity)] // FIXME: remove when done prototyping...
 use bevy::prelude::*;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Resource for watched directories, a 'watched' dir is one we're looking at the contents of,
+/// and periodically scanning for images.
 #[derive(Resource, Default)]
 struct WatchedDirs {
     dirs: Vec<PathBuf>,
     imgs: Vec<PathBuf>,
 }
 
+/// For later spawn/despawn usage, you can make a system that matches on Paths and remove/add quads for an image not already added/that you wanna remove..
 #[derive(Component)]
 struct ImageMarker {
     target: PathBuf,
 }
 
+/// Wrap everything in a plugin for modularity
 pub struct DirWatchingPlugin;
 
 impl Plugin for DirWatchingPlugin {
@@ -21,15 +27,18 @@ impl Plugin for DirWatchingPlugin {
         // Probs do this for yours:
         // app.insert_resource(WatchedDirs::default());
 
-        // for demo purposes
+        // for demo purposes I've just hardcoded something.
         let img_dirs_testing = PathBuf::from("/media/jer/ARCHIVE/jpg/2024/December");
         app.insert_resource(WatchedDirs {
             dirs: vec![img_dirs_testing],
             imgs: vec![],
         });
 
+        // I'd scan in the PreUpdate
         app.add_systems(PreUpdate, scan_directories_system);
-        // app.add_systems(Update, spawn_img_paths.run_if(WatchedDirs::should_run));
+
+        //HACKS:
+        // this probably needs a marker to only one once, or on_event::<Event<T>> rather than my hack here.
         app.add_systems(Update, slap_img_on_quad.run_if(WatchedDirs::should_run));
     }
 }
@@ -38,9 +47,9 @@ impl Plugin for DirWatchingPlugin {
 fn scan_directories_system(
     mut watched_dirs: ResMut<WatchedDirs>,
     time: Res<Time>,
-    mut last_scan: Local<Option<f32>>,
+    mut last_scan: Local<Option<f32>>, // This is handy syntax for getting a local Resource<T> that you don't have to declare! (not well documented imo)
 ) {
-    // Only scan every 5 seconds to avoid performance hits
+    // Only scan every 5 seconds to avoid performance hits, you can probs do something more clever than this
     let scan_interval = 5.0;
 
     if let Some(last) = *last_scan
@@ -53,6 +62,7 @@ fn scan_directories_system(
 }
 
 impl WatchedDirs {
+    // we use patterns like this all the time @ dayjob
     fn should_run(res: Res<WatchedDirs>) -> bool {
         !res.imgs.is_empty()
     }
@@ -82,6 +92,8 @@ impl WatchedDirs {
 
         let entries = fs::read_dir(dir)?;
         for entry in entries {
+            //NOTE: a call to .flatten() over an iterator to .collect() would be more my style,
+            // but i've tried to use for-loops here as they're more what bevy's source uses.
             let entry = entry?;
             let path = entry.path();
 
@@ -130,61 +142,49 @@ fn slap_img_on_quad(
         .map(|marker| marker.target.as_path())
         .collect();
 
-    // Grid configuration
+    // Grid configuration (I just did this because I wanted to see how many imagse we can spawn... it's a lot...)
     let grid_size = (watched_dirs.imgs.len() as f32).sqrt().ceil() as i32;
     let quad_spacing = 2.5f32;
     let quad_size = 2.0f32;
 
-    // Create mesh for the quad (using Rectangle shape)
     let quad_mesh = meshes.add(Rectangle::new(quad_size, quad_size));
 
-    let mut spawned_count = 0;
-
     // Spawn quads for new images
-    for (index, img_path) in watched_dirs.imgs.iter().enumerate() {
-        if !existing_paths.contains(img_path.as_path()) {
-            // Calculate grid position
-            let grid_pos = calculate_grid_position(index, grid_size, quad_spacing);
+    watched_dirs
+        .imgs
+        .iter()
+        .enumerate()
+        .for_each(|(index, img_path)| {
+            if !existing_paths.contains(img_path.as_path()) {
+                // Calculate grid position
+                let grid_pos = calculate_grid_position(index, grid_size, quad_spacing);
 
-            // Load the image as a texture
-            let texture_handle: Handle<Image> =
-                asset_server.load(img_path.to_string_lossy().to_string());
+                // Load the image as a texture
+                let texture_handle: Handle<Image> =
+                    asset_server.load(img_path.to_string_lossy().to_string());
 
-            // asset_server.load(format!("file://{}", img_path.to_string_lossy()));
+                // tex -> Bevy Material
+                let material = materials.add(StandardMaterial {
+                    base_color_texture: Some(texture_handle),
+                    unlit: true, // Important to skip the pbr pipeline on images...
+                    ..default()
+                });
 
-            // Create material with the image texture
-            let material = materials.add(StandardMaterial {
-                base_color_texture: Some(texture_handle),
-                unlit: true,
-                ..default()
-            });
-
-            // Spawn the quad entity with modern component-based approach
-            commands.spawn((
-                Mesh3d(quad_mesh.clone()),
-                MeshMaterial3d(material),
-                Transform::from_translation(grid_pos),
-                // .looking_at(Vec3::ZERO, Vec3::Y),
-                ImageMarker {
-                    target: img_path.clone(),
-                },
-                // Visibility::default(),
-                // InheritedVisibility::default(),
-                ViewVisibility::default(),
-            ));
-
-            spawned_count += 1;
-            log::debug!(
-                "Spawned quad for image: {img_path:?} at position: {grid_pos:?}"
-            );
-        }
-    }
-
-    if spawned_count > 0 {
-        log::info!(
-            "Spawned {spawned_count} image quads in a {grid_size}x{grid_size} grid"
-        );
-    }
+                // Spawn the quad, slap the Material in it's `bundle`
+                commands.spawn((
+                    Mesh3d(quad_mesh.clone()),
+                    MeshMaterial3d(material),
+                    Transform::from_translation(grid_pos),
+                    // .looking_at(Vec3::ZERO, Vec3::Y),
+                    ImageMarker {
+                        target: img_path.clone(),
+                    },
+                    // Visibility::default(),
+                    // InheritedVisibility::default(),
+                    ViewVisibility::default(),
+                ));
+            }
+        });
 }
 
 /// Helper function to calculate grid position for an image quad
