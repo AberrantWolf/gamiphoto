@@ -1,4 +1,5 @@
 use bevy::{color::palettes::css::*, prelude::*, winit::WinitSettings};
+use photoview::DirWatchingPlugin;
 
 const NORMAL_BUTTON: Color = Color::srgb(0.15, 0.15, 0.15);
 const HOVERED_BUTTON: Color = Color::srgb(0.25, 0.25, 0.25);
@@ -99,23 +100,32 @@ fn main_ui(_asset_server: &AssetServer) -> impl Bundle + use<> {
         children![(
             selection_layout,
             BackgroundColor(NORMAL_BUTTON),
-            children![
-                Text::new("First"),
-                Text::new("Second")
-            ]
-        )]
+            children![Text::new("First"), Text::new("Second")]
+        )],
     )
 }
 
 fn setup(mut commands: Commands, assets: Res<AssetServer>) {
     // ui camera
-    commands.spawn(Camera2d);
+    commands.spawn((
+        Camera3d::default(),
+        Transform::from_xyz(0.0, 0.0, 15.0).looking_at(Vec3::ZERO, Vec3::Y),
+    ));
+
     commands.spawn(main_ui(&assets));
 }
 
 fn main() {
+    // _ = env_logger::init();
+
     App::new()
-        .add_plugins(DefaultPlugins)
+        .add_plugins((
+            DefaultPlugins.set(AssetPlugin {
+                unapproved_path_mode: bevy::asset::UnapprovedPathMode::Allow,
+                ..Default::default()
+            }),
+            DirWatchingPlugin,
+        ))
         .insert_resource(WinitSettings::desktop_app())
         .add_systems(Startup, setup)
         .add_systems(Update, button_system)
